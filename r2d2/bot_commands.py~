@@ -1,0 +1,911 @@
+import pymysql
+import random
+import re
+# import sys
+from r2d2.bot_commands import *
+from .bot_functions import *
+from .db_functions import *
+from .chat_conf import *
+
+
+#HOST = 'localhost'
+#USER = 'r2d2'
+#PASSWD = 'fkmnfdbcnf'
+#DB = 'r2d2'
+#CHARSET = 'utf8mb4'
+groups = {'user', 'father', 'admin'}
+lang = ['Українська мова', 'Російська мова', 'Англійська мова', 'Зсув']
+
+
+def create_temp_table(table, type, msg):
+    try:
+        db = db_connect()
+        if type == 'dic_table':
+            cursor = db.cursor()
+            sql = 'SELECT name, type, uid FROM temp_tables'
+            cursor.execute(sql)
+            result = cursor.fetchall()
+            for i in range(len(result)):
+                sql = 'DROP TABLE IF EXISTS ' + \
+                    result[i][1] + str(result[i][2])
+                cursor.execute(sql)
+                db.commit()
+            sql = 'DELETE FROM temp_tables WHERE type="' + \
+                type + '" AND uid=' + str(msg['from']['id'])
+            cursor.execute(sql)
+            db.commit()
+            sql = 'INSERT INTO temp_tables (name, type, uid) VALUES ("' + \
+                table + '","' + type + '",' + \
+                str(msg['from']['id']) + ');'
+            cursor.execute(sql)
+            db.commit()
+            sql = 'CREATE TABLE ' + type + \
+                str(msg['from']['id']) + \
+                ' (`db_name` char(10) NOT NULL, `full_name` char(255) NOT NULL DEFAULT "test" ) ENGINE=InnoDB DEFAULT CHARSET=utf8;'
+            cursor.execute(sql)
+            sql = 'SELECT full_name FROM voc WHERE db_name="' + table + '"'
+            cursor.execute(sql)
+            result = cursor.fetchall()
+            if len(result) == 0:
+                print('hello')
+                sql = 'INSERT INTO ' + type + \
+                    str(msg['from']['id']) + \
+                    '(db_name) VALUES ("' + msg['text'] + '")'
+            else:
+                sql = 'INSERT INTO ' + type + \
+                    str(msg['from']['id']) + \
+                    ' (db_name, full_name) VALUES ("' + msg[
+                        'text'] + '","' + result[0][0] + '")'
+            cursor.execute(sql)
+            db.commit()
+            db.close()
+        return 'ok'
+    except:
+        return 'table creation error'
+
+
+def update_dictionary (bot, msg):
+    sql = 'SELECT name FROM temp_tables WHERE type ="dic_table" AND uid ='+str(msg['from']['id'])
+    db = db_connect()
+    cursor = db.cursor()
+    cursor.execute(sql)
+    result = cursor.fetchall()
+    if len(result)!=0:
+        sql = 'UPDATE dic_table'+str(msg['from']['id'])+' SET full_name="'+msg['text']+'" WHERE db_name="'+result[0][0]+'"'
+        cursor.execute(sql)
+        db.commit()
+        sql = 'SELECT * FROM dic_table'+str(msg['from']['id'])
+        cursor.execute(sql)
+        voc_result = cursor.fetchall()
+        sql = 'INSERT INTO voc (db_name, full_name) VALUES ("'+voc_result[0][0]+'","'+voc_result[0][1]+'");'
+        cursor.execute (sql)
+        sql =  'CREATE TABLE '+voc_result[0][0]+'(word text NOT NULL,anagram text NOT NULL,count bigint(20) NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8;'
+        cursor.execute(sql)
+        db.commit()
+#        bot.sendMessage (msg['from']['id'], sql)
+
+
+
+
+def clear_temp_tables():
+    try:
+        db = db_connect()
+        cursor = db.cursor()
+        sql = 'SELECT name, type, uid FROM temp_tables'
+        cursor.execute(sql)
+        result = cursor.fetchall()
+        for i in range(len(result)):
+            sql = 'DROP TABLE IF EXISTS ' + result[i][1] + str(result[i][2])
+            cursor.execute(sql)
+            db.commit()
+            sql = 'DELETE FROM temp_tables WHERE type="' + \
+                result[i][1] + '" AND uid=' + str(result[i][2])
+            cursor.execute(sql)
+            db.commit()
+        db.close()
+        return 'Тимчасові таблиці видалено'
+    except:
+        return 'Помилка видалення тимчасових таблиць'
+
+
+#
+#
+# LOGGIN                                                               #
+#
+#
+
+
+def log(msg):
+    try:
+        chatid = str(msg['chat']['id'])
+        uid = str(msg['from']['id'])
+        msg_text = msg['text']
+        msg_type = 'text'
+        msg_date = str(msg['date'])
+        msg_id = str(msg['message_id'])
+        if 'username' in msg['from']:
+            msg_nick = msg['from']['username']
+        else:
+            msg_nick = 'unknown'
+        sql = 'INSERT INTO chat_log (chat_id, uid, msg_id,msg, msg_type, nick) VALUES (' + \
+            chatid + ',' + uid + ',' + msg_id + ',"' + \
+            msg_text + '","' + msg_type + \
+            '","' + msg_nick + '");'
+        db = db_connect()
+        cursor = db.cursor()
+        cursor.execute(sql)
+        db.commit()
+        return sql
+    except:
+        db.rollback()
+        return 'error log'
+    db.close()
+
+
+def log_stck(msg):
+    try:
+        chatid = str(msg['chat']['id'])
+        uid = str(msg['from']['id'])
+        msg_id = str(msg['message_id'])
+        file_id = msg['sticker']['file_id']
+        emoj = msg['sticker']['emoji']
+        sql = 'INSERT INTO stickers (chat_id, uid, msg_id,file_id) VALUES (' + \
+            chatid + ',' + uid + ',' + \
+            msg_id + ',"' + file_id + '");'
+        db = db_connect()
+        cursor = db.cursor()
+        cursor.execute(sql)
+        db.commit()
+        return 'sticker log OK!'
+    except:
+        db.rollback()
+        return 'error log sticker'
+    db.close()
+
+
+def set_command(msg):
+    try:
+        sql = 'SELECT uid FROM last_command WHERE uid=' + \
+            str(msg['from']['id'])
+        db = db_connect()
+        cursor = db.cursor()
+        cursor.execute(sql)
+        result = cursor.fetchall()
+        if len(result) == 0:
+            sql = 'INSERT INTO last_command (uid, command) VALUES (' + str(
+                msg['from']['id']) + ',"' + get_command(msg['text']) + '");'
+        else:
+            sql = 'UPDATE last_command SET command="' + \
+                get_command(msg['text']) + '" WHERE uid=' + str(
+                    msg['from']['id'])
+        cursor = db.cursor()
+        cursor.execute(sql)
+        db.commit()
+        db.close()
+        return sql
+    except:
+        db.rollback()
+        return 'error updating command'
+    db.close()
+
+
+#
+#
+# READING BASE                                                         #
+#
+#
+
+
+def get_rand_stck():
+    try:
+        sql = 'SELECT file_id FROM stickers'
+        db = db_connect()
+        cursor = db.cursor()
+        cursor.execute(sql)
+        result = cursor.fetchall()
+        return result[random.randint(1, len(result) - 1)][0]
+    except:
+        return 'error get sticker'
+    db.close()
+
+
+def get_dictionary_name():
+    try:
+        sql = 'SELECT * FROM voc'
+        db = db_connect()
+        cursor = db.cursor()
+        cursor.execute(sql)
+        result = cursor.fetchall()
+        return result
+    except:
+        return 'error get dictionary table'
+    db.close()
+
+
+def get_dic_table(msg):
+    try:
+        sql = 'SELECT db_name FROM voc WHERE db_name="' + msg['text'] + '"'
+        db = db_connect()
+        cursor = db.cursor()
+        cursor.execute(sql)
+        result = cursor.fetchall()
+        if len(result) > 0:
+            db.close()
+            return 1
+        else:
+            db.close()
+            return 2
+    except:
+        db.close()
+        return 'error find dic table'
+
+
+def get_last_command(msg):
+    db = db_connect()
+    sql = 'SELECT command FROM last_command WHERE uid=' + \
+        str(msg['from']['id'])
+    cursor = db.cursor()
+    cursor.execute(sql)
+    result = cursor.fetchall()
+    if len(result) != 0:
+        db.close()
+        return str(result[0][0])
+    else:
+        db.close()
+        return 'no commands'
+
+
+#
+#
+# CHECKING COMMANDS                                                    #
+#
+#
+
+
+def in_anagram_mode(msg):
+    sql = 'SELECT command FROM last_command WHERE command="/" AND uid=' + \
+        str(msg['from']['id'])
+    try:
+        db = db_connect()
+        cursor = db.cursor()
+        cursor.execute(sql)
+        result = cursor.fetchall()
+        if len(result) == 0:
+            db.close()
+            return 1
+        else:
+            db.close()
+            return 2
+    except:
+        return 'get anagramm mode error'
+        db.close()
+
+
+def in_dictionary_mode(msg):
+    sql = 'SELECT command FROM last_command WHERE command="/addic" AND uid=' + \
+        str(msg['from']['id'])
+    try:
+        db = db_connect()
+        cursor = db.cursor()
+        cursor.execute(sql)
+        result = cursor.fetchall()
+        if len(result) != 0:
+            db.close()
+            return 1
+        else:
+            sql = 'SELECT command FROM last_command WHERE command="/table" AND uid=' + \
+                str(msg['from']['id'])
+            cursor.execute(sql)
+            result = cursor.fetchall()
+            if len(result) != 0:
+                db.close()
+                return 2
+    except:
+        return 'get dictionary mode error'
+        db.close()
+
+
+#
+#
+# PERMISSIONS                                                          #
+#
+#
+
+
+def check_father(msg):
+    sql = 'SELECT permissions FROM users WHERE uid=' + str(msg['from']['id'])
+    try:
+        db = db_connect()
+        cursor = db.cursor()
+        cursor.execute(sql)
+        result = cursor.fetchall()
+        if len(result) != 0:
+            if result[0][0] == 'father':
+                db.close()
+                return 1
+            else:
+                db.close()
+                return 2
+        else:
+            db.close()
+            return 2
+
+    except:
+        return 'get permissions error'
+        db.close()
+
+
+def check_admin(msg):
+    sql = 'SELECT permissions FROM users WHERE uid=' + str(msg['from']['id'])
+    try:
+        db = db_connect()
+        cursor = db.cursor()
+        cursor.execute(sql)
+        result = cursor.fetchall()
+        if len(result) != 0:
+            if result[0][0] == 'admin':
+                db.close()
+                return 1
+            else:
+                db.close()
+                return 2
+        else:
+            db.close()
+            return 2
+    except:
+        return 'get permissions'
+        db.close()
+
+
+def check_user(msg):
+    sql = 'SELECT permissions FROM users WHERE uid=' + str(msg['from']['id'])
+    try:
+        db = db_connect()
+        cursor = db.cursor()
+        cursor.execute(sql)
+        result = cursor.fetchall()
+        if len(result) != 0:
+            if result[0][0] == 'user':
+                db.close()
+                return 1
+            else:
+                db.close()
+                return 2
+        else:
+            db.close()
+            return 2
+
+    except:
+        return 'get permissions'
+        db.close()
+
+
+def renew_users(msg):
+    if check_father(msg) == 1 or check_admin(msg) == 1:
+        db = db_connect()
+        sql = 'SELECT DISTINCT uid, nick FROM chat_log WHERE nick != "unknown"'
+        cursor = db.cursor()
+        cursor.execute(sql)
+        result = cursor.fetchall()
+        for i in range(len(result)):
+            sql = 'SELECT  uid FROM users WHERE uid=' + str(result[i][0])
+            cursor.execute(sql)
+            result2 = cursor.fetchall()
+            if len(result2) == 0:
+                sql = 'INSERT INTO users (uid, nick) VALUES (' + str(
+                    result[i][0]) + ',"' + result[i][1] + '");'
+                cursor.execute(sql)
+                db.commit()
+        db.close()
+        return len(result2)
+
+
+def update_permissions(uid, permisions):
+    if permisions in groups:
+        db = db_connect()
+        cursor = db.cursor()
+        sql = 'UPDATE users SET permissions="' + \
+            permisions + '" WHERE uid=' + str(uid)
+        cursor.execute(sql)
+        db.commit()
+        db.close()
+        return 1
+    else:
+        return 2
+
+
+def find_user(uid):
+    db = db_connect()
+    sql = 'SELECT uid FROM users WHERE uid=' + str(uid)
+    cursor = db.cursor()
+    cursor.execute(sql)
+    result = cursor.fetchall()
+    if len(result) == 0:
+        return 2
+    else:
+        return 1
+
+
+def add_new_dic(bot, file, msg):
+    bot.sendMessage(msg['from']['id'], msg['from']['username'] +
+                    ' додаю новий словник')
+    file.seek(0)
+    db = db_connect()
+    cursor = db.cursor()
+    sql = 'SELECT * FROM dic_table' + str(msg['from']['id'])
+    cursor.execute(sql)
+    result = cursor.fetchall()
+    if len(result) != 0:
+        sql = 'SELECT  * FROM voc WHERE db_name="' + result[0][0] + '"'
+        cursor.execute(sql)
+        result_voc_table = cursor.fetchall()
+        if len(result_voc_table) != 0:
+            new_table = 0
+        else:
+            new_table = 1
+    if new_table == 1:
+        sql = 'INSERT INTO voc(db_name,full_name) VALUES ("' + \
+            result[0][0] + '","' + result[0][1] + '")'
+        cursor.execute(sql)
+        db.commit()
+        sql = 'CREATE TABLE ' + \
+            result[0][
+                0] + ' (`word` text NOT NULL,`anagram` text NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;'
+        cursor.execute(sql)
+        db.commit()
+    for line in file.readlines():
+        sql = 'SELECT * FROM ' + result[0][0] + \
+            ' WHERE word="' + rl_strip(line) + '"'
+        cursor.execute(sql)
+        result_match = cursor.fetchall()
+        if len(result_match) == 0:
+            sql = 'INSERT INTO ' + \
+                result[0][0] + '(word,anagram) VALUES ("' + \
+                rl_strip(line) + '","' + sort_string(line) + '")'
+            cursor.execute(sql)
+            db.commit()
+            pos = file.tell()
+            if pos % 10000 == 0:
+                bot.sendMessage(msg['from']['id'], msg['from']['username'] +
+                                ' додав ' + str(pos) + ' слів')
+
+    bot.sendMessage(msg['from']['id'], msg['from']['username'] +
+                    ' закінчив додавати словник')
+    return 1
+
+
+def get_command(command):
+    i = 0
+    i = command.find(' ') + 1
+    if i == 0:
+        i = len(command)
+    else:
+        i -= 1
+    command = command[0:i]
+    return command
+
+
+def bot_start():
+    result = r'Привіт, я маленький, але гордий бот r2d2. Якщо ти хочеш дізнатися, що я вмію, набери /help'
+    return result
+
+
+def bot_help():
+    result = '/start: почати спілкування \r\n /help: перечитати цей текст \r\n /: перемикання режиму анаграмування \r\n /addic: додати словник в базу \r\n /printdic: надрукувати список словників'
+    return result
+
+
+def bot_anagramm(msg):
+    if 'username' not in msg['from']:
+        result = 'Все що ви введете, я спробую анаграмувати'
+    else:
+        result = msg ['from']['username'] + \
+            ', Все що ви введете я спробую анаграмувати'
+    return result
+
+
+def bot_end_anagramm(msg):
+    if 'username' not in msg['from']:
+        result = 'Ви вийшли з режиму анаграмування'
+    else:
+        result = msg['from']['username'] + \
+            ', ви вийшли з режиму анаграммування'
+    return result
+
+
+def ins_dic(msg):
+    return msg['from']['username'] + ', відправте мені особистим назву таблиці словника'
+
+
+def print_dic():
+    return 'Назва таблиці - Тип таблиці'
+
+
+def not_have_permissions(msg):
+    return msg['from']['username'] + ', недостатньо прав для виконання комманди'
+
+
+def unknown_command():
+    return 'Я не знаю цієї команди'
+
+
+def print_usr(msg):
+    if check_father(msg) == 1 or check_admin(msg) == 1:
+        db = db_connect()
+        cursor = db.cursor()
+        sql = 'SELECT * FROM users'
+        cursor.execute(sql)
+        result = cursor.fetchall()
+        return result
+    else:
+        return not_have_permissions(msg)
+
+
+def change_permissions(msg):
+    t = msg['text'].split(' ')
+    if len(t) != 3:
+        return 'check syntax'
+    if find_user(t[1]) == 1:
+        if t[2] in groups:
+            if check_father(msg) == 1 and t[2] == 'father':
+                update_permisions(t[1], t[2])
+                return t[1] + ' is in ' + t[2] + ' group'
+            else:
+                if check_father(msg) == 1 or check_admin(msg) == 1 and t[2] != 'father':
+                    msg['from']['id'] = t[1]
+                    if check_father(msg) != 1:
+                        update_permissions(t[1], t[2])
+                        return t[1] + ' is in ' + t[2] + ' group'
+                    else:
+                        return 'do not touch my father!'
+                else:
+                    return not_have_permissions(msg)
+            return t[1]
+        else:
+            return 'no such group'
+    else:
+        return 'no such user'
+
+
+def file_check(file, bot):
+    file.seek(0)
+    pattern = r'^\w+\-*\'*\w*\s*\w*\-*\'*\w+$'
+    i = 0
+    errors = 0
+    error_line = '№', 'Cлово'
+    errors_list = [error_line]
+    for line in file.readlines():
+        i += 1
+        if line.strip():
+            if re.search(pattern, line):
+                pattern2 = r'[0-9]'
+                if re.search(pattern2, line):
+                    error_line = [i], [line]
+                    errors_list.append(error_line)
+                    errors += 1
+            else:
+                error_line = i, line
+                errors_list.append(error_line)
+                errors += 1
+    if errors == 0:
+        return 1
+    else:
+        return errors_list
+
+
+def find_anagram(bot, msg):
+    s = msg['text']
+    if s.find('+') == -1:
+        return find_strong_anagram(bot, msg)
+    if s.find('+') == len(s) - 1:
+        s = s[:len(s) - 1]
+        s = sort_string(s)
+        s = s.lower()
+        s = string_like(s)
+        msg['text'] = s
+        return find_like_anagram(bot, msg)
+    if s.find('+') < len(s) - 1 and s.find('+') != -1:
+        try:
+            length = int(s[s.find('+'):])
+        except:
+            return ['Помилка формату запиту']
+        s = s[:s.find('+')]
+        s = sort_string(s)
+        s = s.lower()
+        s = string_like(s)
+        msg['text'] = s
+        return find_like_length_anagram(bot, msg, length)
+
+
+def find_strong_anagram(bot, msg):
+    anagram_line = ['Словник', 'Слово']
+    anagrams = [anagram_line]
+    db = db_connect()
+    sql = 'SELECT * FROM voc'
+    cursor = db.cursor()
+    cursor.execute(sql)
+    dic_db_list = cursor.fetchall()
+    for db_dic_name in dic_db_list:
+        sql = 'SELECT word FROM ' + \
+            db_dic_name[0] + ' WHERE anagram="' + \
+            sort_string(msg['text']).lower() + '"'
+        cursor.execute(sql)
+        result = cursor.fetchall()
+        for words in result:
+            anagrams.append([db_dic_name[1], words[0]])
+    if len(anagrams) == 1:
+        anagrams[0] = 'Нічого не знайдено'
+    return anagrams
+
+
+def find_like_anagram(bot, msg):
+    anagram_line = ['Словник', 'Слово']
+    anagrams = [anagram_line]
+    db = db_connect()
+    sql = 'SELECT * FROM voc'
+    cursor = db.cursor()
+    cursor.execute(sql)
+    dic_db_list = cursor.fetchall()
+    for db_dic_name in dic_db_list:
+        sql = 'SELECT word FROM ' + \
+            db_dic_name[0] + ' WHERE anagram LIKE "' + msg['text'] + '"'
+        cursor.execute(sql)
+        result = cursor.fetchall()
+        for words in result:
+            anagrams.append([db_dic_name[1], words[0]])
+    if len(anagrams) > get_max_a_length (bot, msg, db):
+        anagrams.clear()
+        anagrams.append('Знайдено більше ' + str(get_max_a_length(bot, msg, db)) + '-ти результатів пошуку, уточніть параметри')
+        return anagrams
+    if len(anagrams) == 1:
+        anagrams[0] = 'Нічого не знайдено'
+    return anagrams
+
+
+def find_like_length_anagram(bot, msg, length):
+    anagram_line = ['Словник', 'Слово']
+    anagrams = [anagram_line]
+    db = db_connect()
+    sql = 'SELECT * FROM voc'
+    cursor = db.cursor()
+    cursor.execute(sql)
+    dic_db_list = cursor.fetchall()
+    for db_dic_name in dic_db_list:
+        sql = 'SELECT word FROM ' + \
+            db_dic_name[0] + ' WHERE anagram LIKE "' + msg['text'] + '"'
+        cursor.execute(sql)
+        result = cursor.fetchall()
+        for words in result:
+            if len(words[0]) <= length:
+                anagrams.append([db_dic_name[1], words[0]])
+    if len(anagrams) > get_max_a_length(bot, msg, db):
+        anagrams.clear()
+        anagrams.append('Знайдено більше ' + str(get_max_a_length(bot, msg, db)) + '-ти результатів пошуку, уточніть параметри')
+        return anagrams
+    if len(anagrams) == 1:
+        anagrams[0] = 'Нічого не знайдено'
+    return anagrams
+
+
+def find_word(bot, msg):
+    s = msg['text']
+    s = s[1:]
+    s = string_finder(s)
+    anagram_line = ['Словник', 'Слово']
+    anagrams = [anagram_line]
+    db = db_connect()
+    sql = 'SELECT * FROM voc'
+    cursor = db.cursor()
+    cursor.execute(sql)
+    dic_db_list = cursor.fetchall()
+    for db_dic_name in dic_db_list:
+        sql = 'SELECT word FROM ' + \
+            db_dic_name[0] + ' WHERE LOWER(word) LIKE "' + s + '"'
+        cursor.execute(sql)
+        result = cursor.fetchall()
+        for words in result:
+            anagrams.append([db_dic_name[1], words[0]])
+    if len(anagrams) == 1:
+        anagrams[0] = 'Нічого не знайдено'
+    if len(anagrams) > get_max_v_length(bot, msg, db):
+        anagrams.clear()
+        anagrams.append('Знайдено більше ' + str(get_max_v_length(bot, msg, db)) + '-ти результатів пошуку, уточніть параметри')
+        return anagrams
+    return anagrams
+
+
+def parse_morze(bot, msg):
+    if  sorted(check_morze(msg['text'])) != sorted(['-','.']):
+        if check_morze(msg['text']) != 0:
+            morze = replace_morze(msg['text'], check_morze(msg['text']))
+            bot.sendMessage(msg['chat']['id'], 'Пробую морзянку:')
+            bot.sendMessage(msg['chat']['id'], 'Українська: '+morze[0]+' '+ukr_morze(morze[0]))
+            bot.sendMessage(msg['chat']['id'], 'Українська: '+morze[1]+' '+ukr_morze(morze[1]))
+            bot.sendMessage(msg['chat']['id'], 'Російська: '+morze[0]+' '+rus_morze(morze[0]))
+            bot.sendMessage(msg['chat']['id'], 'Російська: '+morze[1]+' '+rus_morze(morze[1]))
+            bot.sendMessage(msg['chat']['id'], 'Англійська: '+morze[0]+' '+eng_morze(morze[0]))
+            bot.sendMessage(msg['chat']['id'], 'Англійська: '+morze[1]+' '+eng_morze(morze[1]))
+    else:
+        bot.sendMessage(msg['chat']['id'], 'Пробую морзянку 2:' )
+        bot.sendMessage(msg['chat']['id'], 'Українська: '+ukr_morze(rl_strip(msg['text'])))
+        bot.sendMessage(msg['chat']['id'], 'Російська: '+rus_morze(rl_strip(msg['text'])))
+        bot.sendMessage(msg['chat']['id'], 'Англійська: '+eng_morze(rl_strip(msg['text'])))
+
+def parse_abc(bot, msg):
+    if check_abc(msg['text'])==1:
+        bot.sendMessage(msg['chat']['id'], 'Пробую перебрати алфавіт')
+        bot.sendMessage(msg['chat']['id'], 'Українська мова: ' + ukr_abc(msg['text']))
+        bot.sendMessage(msg['chat']['id'], 'Російська мова: ' + rus_abc(msg['text']))
+        bot.sendMessage(msg['chat']['id'], 'Англійська мова:' + eng_abc(msg['text']))
+
+
+def parse_caesar(bot, msg):
+    result = caesar(msg['text'], bot, msg)
+    for i in range(len(result)):
+        if result[i] != '':
+            bot.sendMessage(msg['chat']['id'], lang[i] + ': ' + result[i])
+
+
+def config_chat(bot, msg):
+    db = db_connect()
+    sql = 'SELECT * FROM chat_config WHERE chat_id ="' + str(msg['chat']['id']) + '";'
+    cursor = db.cursor()
+    cursor.execute(sql)
+    result = cursor.fetchall()
+    if len(result) == 0:
+        sql = 'INSERT INTO chat_config(chat_id) VALUES \
+                     (' + str(msg['chat']['id']) + ');'
+        bot.sendMessage(msg['chat']['id'], 'Типова конфігурація чату створена')
+        cursor.execute(sql)
+        db.commit()
+    db.close()
+
+def default_dic (bot,msg):
+    db = db_connect()
+    cursor = db.cursor()
+    if len(msg['text'].split())>1:
+        table_name = msg['text'].split()[1]
+    else:
+        bot.sendMessage(msg['chat']['id'], 'Не введено назву таблиці')
+        return 0
+    sql = 'SELECT full_name FROM voc WHERE db_name = "'+table_name+'";'
+    cursor.execute(sql)
+    full_name = cursor.fetchall()
+    if len(full_name) == 0:
+        bot.sendMessage(msg['chat']['id'],'Вказана таблиця не знайдена')
+        return 0
+    else:
+        sql = 'UPDATE chat_config SET def_dic="'+table_name+'" WHERE chat_id='+str(msg['chat']['id'])
+        cursor.execute(sql)
+        db.commit()
+        bot.sendMessage(msg['chat']['id'], 'Таблиця ' + get_chat_dic(msg) + ' встановленна по замовчуванню для даного чату')
+    db.close()
+
+
+def get_chat_dic(msg):
+    db = db_connect()
+    chat_id = str(msg['chat']['id'])
+    sql = 'SELECT def_dic FROM chat_config WHERE chat_id = ' + chat_id
+    cursor = db.cursor()
+    cursor.execute(sql)
+    result = cursor.fetchall()
+    if len(result) != 0:
+        db.close()
+        return result[0][0]
+    else:
+        db.close()
+        return 0
+
+
+def find_chat_anagram(bot, msg):
+    s = msg['text']
+    s = s[1:]
+    if s.find('+') == -1:
+        return find_chat_strong_anagram(bot, msg)
+    if s.find('+') == len(s) - 1:
+        s = s[:len(s) - 1]
+        s = sort_string(s)
+        s = s.lower()
+        s = string_like(s)
+        msg['text'] = s
+        return find_chat_like_anagram(bot, msg)
+    if s.find('+') < len(s) - 1 and s.find('+') != -1:
+        try:
+            length = int(s[s.find('+'):])
+        except:
+            return ['Помилка формату запиту']
+        s = s[:s.find('+')]
+        s = sort_string(s)
+        s = s.lower()
+        s = string_like(s)
+        msg['text'] = s
+        return find_chat_like_length_anagram(bot, msg, length)
+
+
+def find_chat_strong_anagram(bot, msg):
+    anagram_line = ['Словник', 'Слово']
+    anagrams = [anagram_line]
+    anagram_string = msg['text']
+    anagram_string = anagram_string[1:]
+    dic_name = get_chat_dic(msg)
+    db = db_connect()
+    cursor = db.cursor()
+    sql = 'SELECT word FROM ' + \
+            dic_name + ' WHERE anagram="' + \
+            sort_string(anagram_string.lower()) + '"'
+    cursor.execute(sql)
+    result = cursor.fetchall()
+    for words in result:
+        anagrams.append([dic_name, words[0]])
+    if len(anagrams) == 1:
+        anagrams[0] = 'Нічого не знайдено'
+    return anagrams
+
+
+def find_chat_like_anagram(bot, msg):
+    anagram_line = ['Словник', 'Слово']
+    anagrams = [anagram_line]
+    db = db_connect()
+    cursor = db.cursor()
+    anagram_string = msg['text']
+    dic_name = get_chat_dic(msg)
+    sql = 'SELECT word FROM ' + dic_name + ' WHERE anagram LIKE "' + anagram_string + '"'
+    cursor.execute(sql)
+    result = cursor.fetchall()
+    for words in result:
+            anagrams.append([dic_name, words[0]])
+    if len(anagrams) > get_max_a_length(bot, msg, db):
+        return ['Знайдено більше ' + str(get_max_v_length(bot, msg, db)) + '-ти результатыв пошуку, уточныть параметри']
+    if len(anagrams) == 1:
+        anagrams[0] = 'Нічого не знайдено'
+    return anagrams
+
+
+def find_chat_like_length_anagram(bot, msg, length):
+    anagram_line = ['Словник', 'Слово']
+    anagrams = [anagram_line]
+    db = db_connect()
+    anagram_string = msg['text']
+    dic_name = get_chat_dic(msg)
+    cursor = db.cursor()
+    sql = 'SELECT word FROM ' + dic_name + ' WHERE anagram LIKE "' + anagram_string + '"'
+    cursor.execute(sql)
+    result = cursor.fetchall()
+    for words in result:
+            if len(words[0]) <= length:
+                anagrams.append([dic_name, words[0]])
+    if len(anagrams) > get_max_a_length(bot, msg, db):
+        return ['Знайдено більше ' + str(get_max_v_length(bot, msg, db)) + '-ти результатыв пошуку, уточныть параметри']
+    if len(anagrams) == 1:
+        anagrams[0] = 'Нічого не знайдено'
+    return anagrams
+
+
+def get_max_a_length(bot, msg, db):
+        sql = 'SELECT max_anagram FROM chat_config WHERE chat_id =' + str(msg['chat']['id'])
+        cursor = db.cursor()
+        cursor.execute(sql)
+        result = cursor.fetchall()
+        if len(result) > 0:
+            return int(result[0][0])
+        else:
+            return 20
+
+def get_max_v_length(bot, msg, db):
+        sql = 'SELECT max_find FROM chat_config WHERE chat_id =' + str(msg['chat']['id'])
+        cursor = db.cursor()
+        cursor.execute(sql)
+        result = cursor.fetchall()
+        if len(result) > 0:
+            return int(result[0][0])
+        else:
+            return 20
+
+
+def set_max_anagram(bot, msg):
+    db = db_connect()
+    try:
+        result = max_anagram(bot, msg, db)
+        return 'Обмеження кількості результатів анаграмування встановлено: ' + result
+    except:
+        return 'Помилка налаштування чату'
